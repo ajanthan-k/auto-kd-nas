@@ -1,6 +1,7 @@
+import logging
+
 import torch
 import torch.nn as nn
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +74,7 @@ def train_controller(controller, optimizer, training_data_indices, prev_best_ind
 
         optimizer.zero_grad()
         reward_pred = controller(prev_best_indices, global_best_indices, state_indices, device)
-        loss = nn.functional.mse_loss(reward_pred.unsqueeze(0), reward_tensor) # Match shapes
+        loss = nn.functional.mse_loss(reward_pred.unsqueeze(0), reward_tensor)
         loss.backward()
         optimizer.step()
         total_loss += loss.item()

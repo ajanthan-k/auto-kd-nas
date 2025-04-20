@@ -1,15 +1,13 @@
 import json
 import logging
 
-
 import optuna
 from optuna.samplers import TPESampler
-
-from utils import construct_student_model, get_latency, calculate_reward
 from trainer import hidden_state_distillation_trainer
+from utils import calculate_reward, construct_student_model, get_latency
 
 logger = logging.getLogger(__name__)
-
+ 
 def objective(trial, args, teacher_model, teacher_latency, search_space,
               proxy_dataloader, latency_measure_dataloader):
     """ Optuna objective function. """
@@ -21,7 +19,7 @@ def objective(trial, args, teacher_model, teacher_latency, search_space,
     config_dict["num_attention_heads"] = trial.suggest_categorical("num_attention_heads", search_space["num_attention_heads"])
     config_dict["hidden_size"] = trial.suggest_categorical("hidden_size", search_space["hidden_size"])
 
-    # Ensure hidden_size is divisible by num_attention_heads - Resample heads if not
+    # Ensure hidden_size is divisible by num_attention_heads - resample if not
     retries = 0
     max_retries = 5
     while config_dict["hidden_size"] % config_dict["num_attention_heads"] != 0 and retries < max_retries:
@@ -38,15 +36,14 @@ def objective(trial, args, teacher_model, teacher_latency, search_space,
     model_size = sum(p.numel() for p in student_model.parameters() if p.requires_grad)
     logger.info(f"  Model Size: {model_size / 1e6:.2f}M parameters")
 
-
     loss = hidden_state_distillation_trainer(
         proxy_dataloader, teacher_model, student_model, epochs=args.mini_kd_epochs, lr=args.learning_rate
     )
     latency = get_latency(student_model, latency_measure_dataloader)
     reward = calculate_reward(loss, latency, teacher_latency, args.reward_alpha, args.reward_beta)
 
-    # Store Metadata
-    trial.set_user_attr("config_str", json.dumps(config_dict)) # Store config as string
+    # Store metadata
+    trial.set_user_attr("config_str", json.dumps(config_dict))
     trial.set_user_attr("loss", loss)
     trial.set_user_attr("latency", latency)
     trial.set_user_attr("size", model_size)

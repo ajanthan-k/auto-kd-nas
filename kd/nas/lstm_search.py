@@ -1,10 +1,11 @@
-import torch
-import numpy as np
 import logging
 
-from .lstm_controller import Controller, train_controller
-from utils import construct_student_model, get_latency, calculate_reward
+import numpy as np
+import torch
 from trainer import hidden_state_distillation_trainer
+from utils import calculate_reward, construct_student_model, get_latency
+
+from .lstm_controller import Controller, train_controller
 
 logger = logging.getLogger(__name__)
 
@@ -33,15 +34,15 @@ def run_lstm_nas(args, device, teacher_model, teacher_latency, search_space,
         logger.info(f"\nLSTM Episode {episode+1}/{args.lstm_episodes}, Exploration Ratio: {epsilon:.2f}")
         num_random = int(epsilon * args.lstm_samples)
         num_controller = args.lstm_samples - num_random
-        candidate_indices = [] # Store lists of indices
+        candidate_indices = []
 
         # Exploitation: Controller predicts high reward states
         if num_controller > 0:
             # Sample a pool of random candidate indices
             pool_indices = []
-            for _ in range(args.lstm_samples * 5): # Larger pool for better selection
+            for _ in range(args.lstm_samples * 5):
                 config = {key: np.random.choice(search_space[key]) for key in state_keys}
-                # Ensure validity
+
                 while config["hidden_size"] % config["num_attention_heads"] != 0:
                     config = {key: np.random.choice(search_space[key]) for key in state_keys}
                 pool_indices.append(controller.config_to_indices(config))
@@ -60,7 +61,7 @@ def run_lstm_nas(args, device, teacher_model, teacher_latency, search_space,
         # Exploration: Random states (indices)
         for _ in range(num_random):
             config = {key: np.random.choice(search_space[key]) for key in state_keys}
-            # Ensure validity
+
             while config["hidden_size"] % config["num_attention_heads"] != 0:
                 config = {key: np.random.choice(search_space[key]) for key in state_keys}
             candidate_indices.append(controller.config_to_indices(config))
@@ -71,7 +72,7 @@ def run_lstm_nas(args, device, teacher_model, teacher_latency, search_space,
 
         for i, indices in enumerate(candidate_indices):
             config = controller.indices_to_config(indices)
-            config_key = tuple(sorted(config.items())) # Use sorted tuple as key
+            config_key = tuple(sorted(config.items()))
 
             if config_key in evaluated_configs:
                 result = evaluated_configs[config_key]
@@ -85,11 +86,7 @@ def run_lstm_nas(args, device, teacher_model, teacher_latency, search_space,
                 loss = hidden_state_distillation_trainer(
                     proxy_dataloader, teacher_model, student_model, epochs=args.mini_kd_epochs, lr=args.learning_rate
                 )
-
-                # Latency
                 latency = get_latency(student_model, latency_measure_dataloader)
-
-                # Reward
                 reward = calculate_reward(loss, latency, teacher_latency, args.reward_alpha, args.reward_beta)
 
                 result = {'config': config, 'reward': reward, 'loss': loss, 'latency': latency, 'size': model_size}
@@ -117,5 +114,4 @@ def run_lstm_nas(args, device, teacher_model, teacher_latency, search_space,
         # Decay exploration ratio
         epsilon = max(epsilon_min, epsilon - args.epsilon_decay)
 
-    # Return list of evaluated config dictionaries with their results
     return list(evaluated_configs.values())

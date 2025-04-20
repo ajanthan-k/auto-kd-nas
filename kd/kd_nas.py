@@ -1,22 +1,21 @@
-import torch
-from torch.utils.data import DataLoader
-from transformers import (
-    AutoTokenizer,
-    DataCollatorForLanguageModeling,
-    AutoModelForMaskedLM,
-)
-from datasets import load_dataset
-import logging
 import argparse
-import os
 import json
+import logging
+import os
 
-from utils import tokenize_function, get_latency, construct_student_model
-from search_space import get_search_space_auto
-from trainer import hidden_state_distillation_trainer
+import torch
+from datasets import load_dataset
 from nas.lstm_search import run_lstm_nas
 from nas.optuna_search import run_optuna_nas
-
+from search_space import get_search_space_auto
+from torch.utils.data import DataLoader
+from trainer import hidden_state_distillation_trainer
+from transformers import (
+    AutoModelForMaskedLM,
+    AutoTokenizer,
+    DataCollatorForLanguageModeling,
+)
+from utils import construct_student_model, get_latency, tokenize_function
 
 logging.basicConfig(
     level=logging.INFO,
@@ -157,16 +156,16 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Neural Architecture Search with Knowledge Distillation")
 
-    # Required Arguments
+    # Required Args
     parser.add_argument("--teacher", type=str, default="google-bert/bert-base-uncased")
     parser.add_argument("--search", type=str, required=True, choices=['LSTM', 'Optuna'])
 
-    # Optional Arguments - Data
+    # Optional - Data
     parser.add_argument("--dataset", type=str, default="imdb")
     parser.add_argument("--dataset_subset_size", type=int, default=50000)
     parser.add_argument("--output_dir", type=str, default="./kd_nas_output")
 
-    # Optional Arguments - NAS Hyperparameters
+    # Optional - NAS Hyperparameters
     parser.add_argument("--lstm_episodes", type=int, default=15)
     parser.add_argument("--lstm_samples", type=int, default=20)
     parser.add_argument("--epsilon_decay", type=float, default=0.05)
@@ -174,16 +173,16 @@ if __name__ == "__main__":
     parser.add_argument("--mini_kd_epochs", type=int, default=4)
     parser.add_argument("--proxy_fraction", type=float, default=0.2)
 
-    # Optional Arguments - Training Hyperparameters
+    # Optional - Training Hyperparameters
     parser.add_argument("--full_kd_epochs", type=int, default=20)
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--learning_rate", type=float, default=5e-5)
 
-    # Optional Arguments - Reward Calculation
+    # Optional - Reward Calculation
     parser.add_argument("--reward_alpha", type=float, default=-0.07)
     parser.add_argument("--reward_beta", type=float, default=0.6)
 
-    # Optional Arguments - Control Flow
+    # Optional - Control Flow
     parser.add_argument("--nas_only", action='store_true',
                         help="If set, only run NAS and save top architectures, skip final training.")
 

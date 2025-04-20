@@ -1,114 +1,137 @@
-# adls_group_11: Knowledge distillation with neural architacture search for language models
+# KD-NAS: Automated Knowledge Distillation with Neural Architecture Search for Language Models
+
 ## Overview
 
-The project is centered around designing an efficient and automated optimization pipeline for knowledge distillation (KD) of language models. Our pipeline uses neural architecture search (NAS) to perform KD on a pool of student models. This allows for discovery of more optimal network structures while also enable us to expand the usability of the KD pipeline to a range of different models.
+This project implements **KD-NAS**, a framework for automating the discovery of efficient student model architectures for language model compression via knowledge distillation (KD). The core contribution is an efficient **Neural Architecture Search (NAS)** pipeline that explores, evaluates, and selects optimal student configurations based on both performance and latency.
 
-Our pipeline offers the following improvements compared to a conventional KD flow on a fixed student model:
-- **Model-agnostic approach of KD utilizing masked layer modelling for training during distillation.** The pipeline works on a variety of language models (tested with ALBERT, RoBERTa, and variations of BERT) without extra modification. 
-- **Highly automated pipeline with minimal human intervention required.** The student models are generated automatically within a search space defined by analyzing the teacher model configuration. The best performing models are then selected through NAS. Therefore an optimized student model can be obtained without any extra input besides teacher model and KD training data.
-- **Faster KD with a multi-stage KD process.** This will be covered in more detail in the functionality description section.
-- **More flexible training process.** Parameters in the pipeline process can be easily changed to optimize for accuracy, speed or generalization.
+The KD component uses hidden state distillation, while the NAS component supports two strategies:
+1.  **Optuna-based optimisation:** Uses the TPE sampler for Bayesian optimisation of architectures.
+2.  **Reinforcement Learning (RL) based LSTM Controller:** Trains an LSTM network to predict rewards of candidate architectures based on past performance.
 
-## Repository Structure
-This repository is organized in the following order:
-- **docs/**: Contains images and example Jupyter Notebooks that demonstrates key components of the KD pipeline in a code walkthrough style
-- **kd/**: Contains the collection of functions and classes that implement the KD pipeline, ready to be imported and used
-- **tests/**: Unit testing of the components in **kd/**
+A latency-aware reward signal guides the search process, balancing the trade-off between model accuracy (proxied by distillation loss) and inference speed.
 
-## Functionality Description
-### Pipeline overview
-Our pipeline can use either the built-in optimizer (optuna) or the reinforcement learning optimizer. The main steps of the KD process is summarized below:
-1. Select a teacher model and a task dataset that can be used to train it.
-2. Extract the architecture structure from the teacher model. Then use them to construct a search space for KD training on the student models.
-3. Select a variety of student model choices.
-4. For the first episode, using the search space to first randomly selects N candidate configs for student models.
-5. Perform mini-KD on each candidate model. During the mini-KD training, each candidate model learns a mapping from the teacher model's layers to its own layers. The mini-KD training uses only 30% of the input dataset. Each candidate is trained for a few epochs (typically 4 or 5) and the loss at the last epoch is stored. The latency for each candidate is computed at the end of the training.
-6. Using a reward function to calculate a performance score for each candidate models.
-7. If using the optuna optimizer, the pipeline will automatically choose the more promising candidates from the search space. If using the RL optimizer, the candidate historys, including the global best, episode best and previous global best candidate configs are stored and passed in to a LSTM. The LSTM will be trained to predict the most promising candidate config.
-8. At the end of each episode, decrease the exploration ratio so that in the end of the training, all candidate config will be chosen using the LSTM. This step is ignored for the optuna version.
-9. At the end of the last episode, the global best model will be selected for post NAS training. This step can be skipped if one wish to prevent overfitting or if the model has a fast converging nature.
-10. The trained best model will be tested using the glue score function.
+## Main Features
 
-A Jupyter Notebook version of RL KD NAS pipeline can be found in [docs/notebooks/kd_nas_lstm.ipynb](docs/notebooks/kd_nas/lstm.ipynb).
+*   **Automated Architecture Search:** Discovers student model architectures using NAS.
+*   **BERT-like Model Support:** Compatible with teacher/student models from the BERT family (e.g., BERT, RoBERTa). 
+*   **Flexible NAS Strategies:** Offers both Optuna (TPE) and an RL-based LSTM controller for architecture search.
+*   **Efficient Proxy Evaluation:** Uses "mini-KD" on a data subset for faster architecture evaluation during NAS.
+*   **Hidden State Distillation:** Implements hidden state matching (Uniform+Last mapping) with a trainable linear projection for KD.
 
-![kd_pipeline_overview](docs/imgs/kd_pipeline_overview.jpg)
+![Pipeline Overview](docs/imgs/kd-nas-lstm-architecture.png)
+*Figure 1: High-level overview of the KD-NAS pipeline with the LSTM controller.*
 
-### Data Loader
-This function uses a checkpoint of a pretrained model from Hugging face to load the dataset and the tokenizer.
+## Installation and Usage
 
-### Construct Teacher Model
-This function uses the previously loaded checkpoints to construct a teacher model to be used for the distillation process.
+1.  Clone the repository
+2.  Install dependencies:
+    ```bash
+    pip install -r requirements.txt
+    ```
+    *(Ensure compatible PyTorch version with CUDA support installed for using GPU.)*
 
-### Construct Search Space
+**Example Usage**
 
-Based on the teacher model configuration, automatically construct a dictionary of feasible architecture parameters for the student models. The search space includes the following parameters:
-- **num_hidden_layers**: Number of transformer layers in the model
-- **num_attention_heads**: Number of attention heads in each layer
-- **hidden_size**: Dimension of the hidden representations
-- **intermediate_size**: Dimension of the feedforward network
-- **hidden_act**: Activation function used in the model
+This command runs NAS using the LSTM controller on the `imdb` dataset with `roberta-base` as the teacher. It performs 15 episodes of search and saves the top 10 best-performing architectures found (based on the reward) to the output directory without performing full final training.
 
-### Mini-KD
-
-Our KD process is done with hidden state distillation. The aim is to let the student learn the hidden state representations from the teacher model. To account for differences in layer sizes of the teacher and student, we chose a multi-layer mapping strategy that allows each student layer to learn from two teacher layers. For a student with $L^s$ layers and a teacher with $L^t$ layers, a single student layer $i$ will learn from the teacher layers $L^t-L^s+i$ (last strategy) and $i \left\lfloor \frac{L^T}{L^S} \right\rfloor$ (skip strategy). 
-
-Since a student layer can learn from two teacher layers, and the student model might have a smaller hidden state size, a linear projection of the student is used to map the student hidden states onto the teacher ones linearly, even if there are differences in hidden state sizes. This is done by using a learnable linear layer applied to each student layer that is also trained during the KD process. This linear layer projects a student layer with a hidden size $H_s$ to a size $2*H_t$. 
-
-![kd_mapping](docs/imgs/kd_mapping.jpg)
-
-Then we compute the mean square error between the projected student and teacher hidden states. And finally we train the candidate model for a few epoches along with the projection layer. At the end the candidate model will be assigned a reward score, which is a combination of performance (MSE loss) and efficiency (latency). 
-
-$reward = (1 - loss_{MSE}) · (latency_S / (β · latency_T))^α$
-
-### LSTM Unit
-Our training loop includes a controller that uses past knowledge about model distillation to make prediction that selects the most promising candidates for the next episode. We used a LSTM unit as our controller. It takes as input the data of the global best model, the previous episode best model and all the candidates from the previous episode.
-
-### Model Ranking
-
-After training all the selected candidate models during a single episode, we need to rank them based on their rewards. We store the best performing model and its config into the global best tuple. As well as the prevously best performing model in the last episode and its config. We also need to store the config of all the candidate models that we have selected in that episode. These cached models are then used to train the RL controller.
-
-### Full KD Trainer
-This function is used to perform post KD finetuning to the best performing model obtained from the NAS session. It works in the same way as the mini-KD function but uses the entire dataset. A step-by-step guide of the KD trainer can be found in the [docs/notebooks/kd.ipynb](docs/notebooks/kd.ipynb) notebook. There's an option to enable post distillation training by setting `pdt=True` in the `run_rl_kd()` function.
-
-After the KD training, one can save the best performing model using the follow lines.
-
-```python
-best_model.save_pretrained("trained_model_dir0")
-tokenizer.save_pretrained("trained_model_dir0")
+```bash
+python kd_nas.py \
+    --search LSTM \
+    --teacher FacebookAI/roberta-base \
+    --dataset imdb \
+    --lstm_episodes 15 \
+    --output_dir ./results/roberta_imdb_lstm_nas \
+    --nas_only
 ```
 
-### GLUE Score Evaluation
-The GLUE benchmark is done through [run_glue.py](https://github.com/huggingface/transformers/blob/main/examples/pytorch/text-classification/run_glue.py), a standard GLUE evaluation script provided on the Huggingface GitHub repository. Examples of how the script was used during our testing can be found in the [docs/notebooks/glue.ipynb](docs/notebooks/glue.ipynb) notebook. Evaluation was done by following procedures outlined by the documentation of the language models used for teacher models, fine tuning the model to the given task dataset with 3-4 epochs, with batch size and learning rate matching with values seen in the documentation. 
+Refer to [README](kd/README.md) for more detail.
 
-The following is an example of how to evaluate GLUE scores for trained models produces by the pipeline.
+## Workflow overview
 
-```python
-import os
-import json
-import shutil
+The KD-NAS pipeline follows these steps:
 
-glue_tasks = ['cola', 'mnli', 'mrpc', 'qnli', 'qqp', 'rte', 'sst2', 'stsb', 'wnli']
-output_dirs = [f'trained_model_dir0', f'trained_model_dir1' ...]
+1.  **Setup & Data Preparation:**
+    * Loads the specified dataset (e.g., `imdb`, `wiki_text`) and the teacher model's tokenizer.
+    * Tokenizes the data and prepares DataLoaders for full training, proxy training (for NAS evaluation), and consistent latency measurement.
 
-for output_dir in output_dirs:
-  for task in glue_tasks:
-    result_dir = f'results/{task}/0'
-    ! python run_glue.py \
-        --model_name_or_path {output_dir} \
-        --task_name {task} \
-        --do_train True\
-        --do_eval \
-        --per_device_train_batch_size 32 \
-        --learning_rate 1e-4 \
-        --num_train_epochs 4 \
-        --output_dir {result_dir} \
-        --report_to none
-    print(f'Task: {task} complete.')
-    print("")
-    torch.cuda.empty_cache()
+2.  **Teacher Model Preparation:**
+    * Loads the pre-trained teacher model (e.g., `bert-base-uncased`).
+    * Freezes the teacher's weights (used only for inference during KD).
+    * Measures and records the teacher's baseline inference latency for reward calculation.
 
-    if os.path.exists('/content/results'):
-      shutil.rmtree('/content/results')
-    if os.path.exists('/content/hf_cache'):
-      shutil.rmtree('/content/hf_cache')
+3.  **Search Space Definition:**
+    * Automatically defines the search space for student architectures (e.g., ranges for `num_hidden_layers`, `hidden_size`, `num_attention_heads`, `intermediate_size`) derived from the teacher model's configuration. (WIP)
+
+4.  **Neural Architecture Search (NAS):**
+    * Executes the chosen search strategy (`Optuna` or `LSTM`).
+    * **Iteratively:**
+        * The NAS controller/optimiser proposes a candidate student architecture config.
+        * A student model is constructed based on this config.
+        * **Proxy Evaluation:** The student undergoes a short "mini-KD" training phase on a smaller proxy dataset, learning from the frozen teacher via hidden state distillation.
+        * The student's inference latency is measured.
+        * A **reward** is calculated based on the mini-KD performance (loss) and the measured latency, aiming to balance accuracy and speed. \
+        $\text{reward} = (1 - \text{loss}_{MSE}) \times (\frac{\text{latency}_S}{\beta \times \text{latency}_T})^\alpha$ \
+        (where $\alpha$ controls latency penalty and $\beta$ scales the target latency relative to the teacher).
+        * The NAS controller/optimizer uses this reward to guide the search for better architectures in subsequent iterations.
+
+5.  **Result Collation:**
+    * After the NAS process completes (after a set number of trials or episodes), all evaluated architectures and their corresponding metrics (config, reward, loss, latency, size) are collected.
+    * Results are sorted by the calculated reward score (higher is better).
+
+6.  **Final Output:**
+    * **If `--nas-only` is specified:** Saves the configs and performance metrics of the top N discovered architectures to a file.
+    * **Otherwise (default):**
+        * Selects the single best architecture (highest reward).
+        * Constructs the final student model using this best config.
+        * Performs **full knowledge distillation** training on the complete dataset for a specified number of epochs.
+        * Saves the trained final student model, tokenizer, and the best NAS configuration found.
+
+## Components
+
+### Knowledge Distillation Trainer
+
+Knowledge distillation is performed via hidden state matching. The goal is for the student model to mimic the intermediate representations produced by the teacher model.
+
+* **Layer Mapping:** To handle differences in the number of layers between teacher ($L^t$) and student ($L^s$), we use a **Uniform+Last** mapping strategy. Each student layer $i$ attempts to learn from two teacher layers:
+    *   Layer $\lfloor i \times (L^t / L^s) \rfloor$ (Uniform skip mapping)
+    *   Layer $L^t - L^s + i$ (Last layers mapping)
+* **Hidden Size Projection:** Since student and teacher hidden sizes ($H^s$, $H^t$) may differ, and each student layer maps to *two* teacher layers, a learnable linear projection layer is added. This layer projects the student's hidden state output $H^s$ to dimension $2 \times H^t$, allowing for direct comparison with the concatenated target teacher hidden states. This projection layer is trained concurrently with the student model during distillation.
+*   **Loss:** The MSE between the projected student hidden states and the corresponding concatenated teacher hidden states is used as the distillation loss.
+
+![KD Mapping Strategy](docs/imgs/kd_mapping.jpg)
+*Figure 2: Illustration of the Uniform+Last hidden state mapping and projection.*
+
+During NAS, candidate models and their projection layers are trained for only a few epochs (`--mini_kd_epochs`) on the proxy dataset. The final model is trained for more epochs (`--full_kd_epochs`) on the larger dataset subset.
+
+### LSTM Controller (for RL-based NAS)
+
+The LSTM controller is a small recurrent neural network trained to predict the reward potential of candidate architectures.
+
+*   **Input:** Takes embeddings representing the previous episode's best architecture, the global best architecture found so far, and the current candidate architecture.
+*   **Process:** Processes this sequence through an LSTM layer.
+*   **Output:** Predicts the expected reward for the candidate architecture.
+*   **Training:** Trained using RMSprop to minimize the MSE between its reward predictions and the actual rewards obtained by evaluating architectures. It uses the history of evaluated architectures within an episode to update its weights.
+*   **Guidance:** During NAS, the controller samples a pool of random architectures, predicts their rewards, and selects the top candidates for evaluation, thereby focusing the search on promising regions of the architecture space (exploitation). Random sampling is also included (exploration), controlled by an epsilon-greedy strategy.
+
+### GLUE Benchmark Evaluation (Post-Hoc)
+
+To evaluate the final distilled student models on standard NLP tasks, you can use the GLUE benchmark. This is typically done *after* the KD-NAS pipeline has produced a trained student model.
+
+We use the standard [run_glue.py](https://github.com/huggingface/transformers/blob/main/examples/pytorch/text-classification/run_glue.py) script from the Hugging Face Transformers library.
+
+Here's an example of how to run evaluation for a specific task (e.g. `sst2`) on a saved student model located at `./results/roberta_nas_lstm`:
+
+```bash
+# Example: Evaluate on SST-2 task
+python run_glue.py \
+    --model_name_or_path ./results/roberta_nas_lstm \
+    --task_name sst2 \
+    --do_train \
+    --do_eval \
+    --per_device_train_batch_size 32 \
+    --learning_rate 2e-5 \
+    --num_train_epochs 3 \
+    --output_dir ./glue_results/roberta_nas_lstm/sst2 \
+    --overwrite_output_dir \
+    --report_to none
 ```
